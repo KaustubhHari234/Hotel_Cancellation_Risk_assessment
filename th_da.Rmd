@@ -1,0 +1,118 @@
+---
+title: "Digital Assignment"
+author: Deevi Hari Kaustubh
+output: pdf_document
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*.
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(ranger)
+library(vip)
+library(ggthemes)
+```
+
+```{r}
+hotel_data <- read_csv("C:\\Users\\kaust\\Desktop\\DA\\Programming_ds\\hotel_booking.csv") %>%
+  select(-c(reservation_status, reservation_status_date, name, email, phone_number,credit_card)) %>%
+  mutate(
+    across(c(hotel, meal, country, market_segment, 
+             distribution_channel, reserved_room_type, 
+             assigned_room_type, deposit_type, customer_type), 
+           ~ fct_lump_n(as.factor(.), n = 15)),
+    arrival_date_month = factor(arrival_date_month, levels = month.name) %>% as.integer(),
+    total_stay = stays_in_weekend_nights + stays_in_week_nights,
+    booking_changes_cat = cut(booking_changes, breaks = c(-Inf, 0, 3, Inf)),
+    is_canceled = as.factor(is_canceled)
+  )
+
+rec <- recipe(is_canceled ~ ., data = hotel_data) %>%
+  step_impute_median(all_numeric_predictors()) %>%
+  step_impute_mode(all_nominal_predictors()) %>%
+  step_other(country, threshold = 0.02)
+
+rec_prep <- prep(rec, training = hotel_data)
+hotel_data_prepped <- bake(rec_prep, new_data = hotel_data)
+```
+
+```{r}
+set.seed(123)
+split <- initial_split(hotel_data, prop = 0.85, strata = is_canceled)
+train <- training(split)
+test <- testing(split)
+
+train
+test
+```
+
+```{r}
+rf_spec <- rand_forest(
+  mtry = 20,      
+  trees = 500,
+  min_n = 30        
+) %>%
+  set_engine("ranger", 
+            importance = "permutation",
+            respect.unordered.factors = "order") %>%
+  set_mode("classification")
+```
+
+```{r}
+rf_workflow <- workflow() %>%
+  add_model(rf_spec) %>%
+  add_formula(is_canceled ~ .)
+```
+
+```{r}
+final_model <- fit(rf_workflow, data = train)
+
+```
+
+```{r}
+test_preds <- augment(final_model, test) %>%
+  mutate(.pred_class = factor(.pred_class))
+
+risk_scores <- test_preds %>%
+  mutate(
+    risk_category = case_when(
+      .pred_1 < 0.3 ~ "Low",
+      .pred_1 < 0.7 ~ "Medium",
+      TRUE ~ "High"
+    ) %>% factor(levels = c("Low", "Medium", "High"))
+  )
+```
+
+```{r}
+class_metrics <- test_preds %>% 
+  metrics(truth = is_canceled, estimate = .pred_class)
+
+prob_metrics <- test_preds %>% 
+  roc_auc(truth = is_canceled, .pred_1)
+
+class_metrics
+prob_metrics
+```
+
+```{r fig.height=8, fig.width=12}
+vip(final_model$fit$fit, num_features = 15) + 
+  ggtitle("Feature Importance") +
+  theme_economist()
+```
+
+```{r}
+saveRDS(final_model, "hotel_cancellation_model.rds")
+```
+
+```{r}
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
